@@ -13,9 +13,10 @@ import message_filters
 import DR_init
 from dsr_example.simple.gripper_drl_controller import GripperController
 
+VELOCITY, ACC = 70, 70
+
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "e0509"
-VELOCITY, ACC = 70, 70
 
 DR_init.__dsr__id = ROBOT_ID
 DR_init.__dsr__model = ROBOT_MODEL
@@ -26,25 +27,6 @@ g_pos = [0, 0, 0, 0, 0, 0]
 
 g_Grip = 570
 g_GripNot = 500
-
-# 1. Depth Camera 데이터 처리 클래스
-class DepthCameraManager:
-    def __init__(self, camera_intrinsics):
-        self.intrinsics = camera_intrinsics
-        self.detected_objects = []
-    
-    def process_depth_frame(self, rgb_frame, depth_frame):
-        """depth 이미지에서 객체 감지 및 3D 좌표 계산"""
-        pass
-    
-    def get_object_3d_position(self, obj_id):
-        """객체의 실제 3D 좌표 반환"""
-        pass
-    
-    def get_nearest_object(self):
-        """가장 가까운 객체 반환"""
-        pass
-
 
 class RobotControllerNode(Node):
     def __init__(self):

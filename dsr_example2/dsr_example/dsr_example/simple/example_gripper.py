@@ -4,6 +4,9 @@ from dsr_msgs2.srv import DrlStart
 import DR_init
 from dsr_example.simple.gripper_drl_controller import GripperController
 
+grip_on = 440
+grip_off = 250
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -31,24 +34,26 @@ def main(args=None):
         wait(2)
         
         
-        p_start = posj(0, 0, 90, 0, 90, 0)
-        movej(p_start, VEL, ACC)
+        # p_start = posj(0, 0, 90, 0, 90, 0)
+        # movej(p_start, VEL, ACC)
+        # wait(4)
         gripper.move(0) 
-        wait(4)
+        wait(6)
         
-        for stroke in [500, 580, 500, 580, 500, 580, 500]:
-            node.get_logger().info(f"Moving gripper to stroke position: {stroke}")
-            result = gripper.move(stroke)
+        # for i in range(6):
+        #         stroke = grip_off if i % 2 == 0 else grip_on
+        #         node.get_logger().info(f"[{i+1}/{5}] Gripper move → stroke: {stroke}")
+        #         result = gripper.move(stroke)
 
-            if not result:
-                node.get_logger().error("❌ Gripper move failed!")
-                break
+        #         if not result:
+        #             node.get_logger().error(f"❌ Gripper move failed at iteration {i+1}")
+        #             break
 
-            # ROS-safe wait (콜백은 계속 처리되도록)
-            import time
-            start = time.monotonic()
-            while time.monotonic() - start < 2.2:
-                rclpy.spin_once(node, timeout_sec=0.1)
+        #         # 대기시간 동안 ROS 콜백은 계속 처리되도록 함
+        #         import time
+        #         start = time.monotonic()
+        #         while time.monotonic() - start < 2.6:
+        #             rclpy.spin_once(node, timeout_sec=0.1)
         
         # p1_joint = posj(45, 0, 90, 0, 90, 0)
         # p2_joint = posj(-45, 0, 90, 0, 90, 0)
