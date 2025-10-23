@@ -23,6 +23,13 @@ setup(
                 'dance = dsr_example.demo.dance_m1013:main',
                 'single_robot_simple = dsr_example.simple.single_robot_simple:main',
                 'slope_demo = dsr_example.demo.slope_demo:main',
-        ],
-    },
-)
+                'example_comp = dsr_example.simple.example_comp:main',
+                'example_force = dsr_example.simple.example_force:main',
+                'example_gripper = dsr_example.simple.example_gripper:main',
+                'gripper_drl_controller = dsr_example.simple.gripper_drl_controller:main',
+                'example_move = dsr_example.simple.example_move:main',
+                'test_realsense = dsr_example.simple.test_realsense:main',
+                'test_realsense_force = dsr_example.simple.test_realsense_force:main',
+            ],
+        },
+    )

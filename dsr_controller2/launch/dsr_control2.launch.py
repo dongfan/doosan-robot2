@@ -44,10 +44,10 @@ def generate_launch_description():
 		        {"rate":    100         },
                 {"standby": 5000        },
 		        {"command": True        },  #??? 추후 확인 필요!
-		        {"host":    "127.0.0.1" },
+		        {"host":    "110.120.1.39" },
 		        {"port":    12345       },
-		        {"mode":    "virtual"   },
-		        {"model":   "m1013"     },
+		        {"mode":    "real"   },
+		        {"model":   "e0509"     },
                 {"gripper": "none"      },
 	            {"mobile":  "none"      },
                 #parameters_file_path       # 파라미터 설정을 동일이름으로 launch 파일과 yaml 파일에서 할 경우 yaml 파일로 셋팅된다.    
