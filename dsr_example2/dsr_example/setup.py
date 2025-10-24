@@ -28,9 +28,9 @@ setup(
                 'example_move = dsr_example.simple.example_move:main',
                 'test_realsense = dsr_example.simple.test_realsense:main',
                 'test_realsense_force = dsr_example.simple.test_realsense_force:main',
-                'car_detector = dsr_example.car_detector:main',
                 'fuel_task_manager = dsr_example.fuel_task_manager:main',
-                'main_all = dsr_example.main_all:main',
+                'test_camera = dsr_example.test_camera:main',
+                'realsense_yolo_node = dsr_example.realsense_yolo_node:main',
             ],
         },
     )

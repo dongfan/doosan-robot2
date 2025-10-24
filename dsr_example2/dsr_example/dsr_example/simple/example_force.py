@@ -26,7 +26,6 @@ def main(args=None):
 
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
-
     x0 = [0, 0, 90, 0, 90, 0]
     movej(x0, VEL, ACC)
     wait(0.5)
@@ -37,7 +36,6 @@ def main(args=None):
     set_desired_force(fd, dir=fctrl_dir)
     print("10초간 강성제어 시작")
     wait(10.0)
-
     
     release_force()
     release_compliance_ctrl()
