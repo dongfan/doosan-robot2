@@ -1,12 +1,11 @@
 import cv2
 import rclpy
 from rclpy.node import Node
-import pyrealsense2 as rs
 import numpy as np
 import time
 import math
 
-from std_msgs.msg import String
+# from std_msgs.msg import String
 import json
 
 import threading
@@ -15,18 +14,34 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image, CameraInfo
 import message_filters
 
-from enum import Enum, auto
+from enum import Enum
 
 import DR_init
 from dsr_example.gripper_drl_controller import GripperController
+
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+from dsr_example.realsense_manager import RealSenseManager
 from dsr_example.yolo_manager import YoloDetector
 
-class RobotState(Enum):
-    IDLE = auto()
-    MOVING = auto()
-    ERROR = auto()
-    FUEL_READY = auto()
-    PAUSED = auto()
+ROBOT_STATE = Enum('ROBOT_STATE',
+                   ['IDLE',
+                    'MOVE_TO_FUEL_POS',
+                    'APPROACH_FUEL_NOZZLE',
+                    'GRIP_NOZZLE',
+                    'LIFT_NOZZLE',
+                    'MOVE_TO_CAR_FUEL_PORT',
+                    'FUELING',
+                    'RETURN_NOZZLE',
+                    'RELEASE_NOZZLE',
+                    'MOVE_TO_HOME_POS'])
+
+CAR_TYPE = Enum('CAR_TYPE',
+                ['orange_car',
+                 'green_car',
+                 'yellow_car'])
+
+detected_car_list = []
 
 VELOCITY, ACC = 70, 70
 
@@ -41,24 +56,32 @@ g_vel_rotate = 120
 
 g_force_lift = 20.0
 
-# 주유건 위치
-g_diesel_posj = [-9, 68, 22, 91, 88, -88]
-g_gasoline_posj = [-14, 65, 48, 87, 86, -123]
+# 첫 주유건 위치 : 더미 좌표
+g_oil1_ready_posj = [-10, 63, 32, 91, 85, -104]
+g_oil2_ready_posj = [-14, 65, 48, 87, 86, -123]
 
-# 주유구 위치
-g_fuel_posj = [-13, 33, 82, -52, 58, 40]
-g_fuel2_posj = [500, 0, 300, 0, 0, 0]
+# 주유구 위치 : 더미 좌표
+g_car1_posj = [-13, 33, 82, -52, 58, 40]
+g_car2_posj = [500, 0, 300, 0, 0, 0]
+# 주유시작 위치 : 더미 좌표
+g_fuel_car1_posj = [-52, 34, 81, 61, 83, -135]
+g_fuel_car2_posj = [500, 0, 300, 0, 0, 0]
+
+# 주유 완료후 주유건 위치 : 더미 좌표
+g_oil1_go_posj = [-9, 68, 22, 91, 88, -88]
+g_oil2_go_posj = [-14, 65, 48, 87, 86, -123]
+g_oil1_end_posj = [-9, 68, 22, 91, 88, -88]
+g_oil2_end_posj = [-14, 65, 48, 87, 86, -123]
 
 grip_shot = 440
-grip_gun = 200
+grip_gun = 230
 
-g_Cap_Grip_Off = 420
+g_Cap_Grip_Off = 440
 g_Cap_Grip_On = 580
 
 class FuelTaskManager(Node):
     def __init__(self):
-        super().__init__("fuel_controller_node")
-        self.robot_state = RobotState.IDLE
+        super().__init__("fuel_task_manager")
         self.get_logger().info("🦾 로봇 제어 노드 초기화 중...")
 
         # --- Gripper 초기화 ---
@@ -81,32 +104,94 @@ class FuelTaskManager(Node):
             rclpy.shutdown()
 
         # --- YOLO 객체 인식기 생성 ---
-        self.get_logger().info("YOLO 객체 인식기 생성")
-        self.create_subscription(String, '/yolo/detections', self.yolo_callback, 10)
+        self.bridge = CvBridge()
+        self.realsense = RealSenseManager(self)
+        self.yolo = YoloDetector()
+
+        # 🔹 YOLO 결과 영상 퍼블리시 (rqt에서 구독)
+        self.pub_result = self.create_publisher(Image, '/fuel/image_result', 10)
+        # self.pub_info = self.create_publisher(String, '/fuel/yolo_info', 10)
+
+        # 20Hz 루프
+        self.timer = self.create_timer(0.05, self.timer_callback)
+        self.get_logger().info("📸 FuelTaskManager with YOLO initialized")
+
+        self.current_state = ROBOT_STATE.IDLE
+
+    def timer_callback(self):
+        color_frame, depth_frame = self.realsense.get_latest_frames()
+        if color_frame is None:
+            self.get_logger().warn("⚠️ RealSense frame not received")
+            return
+
+        detections = self.yolo.detect(color_frame)
+        annotated = self.yolo.draw_detections(color_frame, detections)
+
+        img_msg = self.bridge.cv2_to_imgmsg(annotated, encoding='bgr8')
+        self.pub_result.publish(img_msg)
+
+        if not detections:
+            self.tracked_objects = {}  # 감지 안될 때 리셋
+            return
+        
+        current_time = time.time()
+        
+        # self.get_logger().info(f"🎯 Detected: {[(d['cls'], round(d['conf'],2)) for d in detections]}")
+
+        # msg = String()
+        # msg.data = "Detected: " + ", ".join([d['cls'] for d in detections])
+        # self.pub_info.publish(msg)
+        # self.get_logger().info(msg.data)
+
+        # ✅ YOLO 감지된 객체 순회
+        for det in detections:
+            cls = det["cls"]
+            x1, y1, x2, y2 = det["bbox"]
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+
+            # 이전 정보 가져오기
+            if not hasattr(self, "tracked_objects"):
+                self.tracked_objects = {}
+
+            if cls not in self.tracked_objects:
+                # 첫 감지
+                self.tracked_objects[cls] = {
+                    "cx": cx,
+                    "cy": cy,
+                    "start_time": current_time,
+                }
+            else:
+                prev = self.tracked_objects[cls]
+                dist = math.sqrt((cx - prev["cx"])**2 + (cy - prev["cy"])**2)
+                elapsed = current_time - prev["start_time"]
+
+                # ✅ 움직임이 거의 없고 3초 이상 지속되면 정지로 판단
+                if dist < 10 and elapsed >= 3.0:  # 픽셀 단위로 약간의 오차 허용
+                    # self.get_logger().info(f"🟩 {cls} 정지 상태로 판단됨 (3초 이상 고정)")
+
+                    # 👉 여기서 로봇 시퀀스 실행 가능
+                    detected_car_list.append(det)
+
+                    # 중복 실행 방지: start_time 갱신
+                    self.tracked_objects[cls]["start_time"] = current_time
+
+                # 업데이트
+                self.tracked_objects[cls]["cx"] = cx
+                self.tracked_objects[cls]["cy"] = cy
+
 
     def terminate_gripper(self):
         if self.gripper:
             try:
-                print("🧹 Gripper 연결 종료 중...")   # ✅ ROS logger 대신 print 사용
-                self.gripper.terminate()
+                print("🧹 Gripper 연결 종료 중...")
+                if rclpy.ok():
+                    self.gripper.terminate()
+                    print("✅ Gripper 종료 완료")
+                else:
+                    print("⚠️ ROS context 종료됨 — terminate() 생략")
             except Exception as e:
                 print(f"⚠️ 그리퍼 종료 중 오류: {e}")
-
-    def yolo_callback(self, msg):
-        try:
-            detections = json.loads(msg.data)
-        except Exception as e:
-            self.get_logger().warn(f"YOLO 데이터 파싱 오류: {e}")
-            return
-
-        # fuel_cap 감지 시 로봇 동작 실행
-        for d in detections:
-            if d["cls"] == "fuel_cap" and d["conf"] > 0.7:
-                if self.robot_state == RobotState.IDLE:
-                    self.get_logger().info("🚀 'fuel_cap' 감지됨 → 로봇 시퀀스 실행")
-                    self.robot_state = RobotState.MOVING
-                    threading.Thread(target=self.run_robot_sequence, daemon=True).start()
-                    break
 
     #--------------------- 초기화 부분 ---------------------#
     def robot_init(self):
@@ -126,6 +211,7 @@ class FuelTaskManager(Node):
         self.gripper.move(0)
         wait(3)
 
+    #--------------------- Set Position Callback ---------------------#
     def set_pos_callback(self, event, u, v, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             if self.latest_cv_depth_mm is None or self.intrinsics is None:
@@ -166,10 +252,6 @@ class FuelTaskManager(Node):
 
             self.move_robot_and_control_gripper(final_x, final_y, final_z, g_Cap_Grip_Off)
             print("=" * 50)
-
-    def set_robot_state(self, state: RobotState):
-        self.robot_state = state
-        self.get_logger().info(f"Robot state updated to: {state.name}")
 
     # 주유건이 충돌했는지 확인하고 대응하는 함수
     def check_crash(self):
@@ -212,14 +294,14 @@ class FuelTaskManager(Node):
             wait(2.5)
             
             movej(posj(0, 0, 0, 0, 0, -120), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
-            wait(2.0)
+            wait(1.5)
             count = count + 1
 
             if count < cnt:
                 self.gripper.move(g_Cap_Grip_Off)
                 wait(1.5)
                 movej(posj(0, 0, 0, 0, 0, 120), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
-                wait(2.0)
+                wait(1.5)
 
         movel(posx(0, 0, 79, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         self.gripper.move(0)
@@ -257,56 +339,78 @@ class FuelTaskManager(Node):
 
     def run_robot_sequence(self):
         try:
-            from DSR_ROBOT2 import get_current_posx, movel, wait, movej, DR_MV_MOD_REL
+            from DSR_ROBOT2 import get_current_posj, movel, wait, movej, DR_MV_MOD_REL
             from DR_common2 import posx, posj
         except ImportError as e:
             print(f"DSR_ROBOT2 라이브러리를 임포트할 수 없습니다: {e}")
             rclpy.shutdown()
             exit(1)
 
+        gun_posj = get_current_posj()
+
         # 로봇 위치, 그리퍼 초기화
         self.robot_init()
 
         #--------------------- 차량 진입 후 작업 시작 ---------------------#
         # 주유구 위치로 이동 
-        movej(g_fuel_posj, 80, 80)
-        wait(3.0)
+        movej(g_car1_posj, 80, 80)
+        wait(2.0)
 
-        # 주유구 뚜껑 잡으러 이동 -> 오픈을 위한 그리퍼 회전
+        # # 주유구 뚜껑 잡으러 이동 -> 오픈을 위한 그리퍼 회전
         movel(posx(-5, -38, -25, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         self.rotate_grip(3)
-
+        
+        movel(posx(0, 180, -120, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        wait(3.0)
         self.grip_init()
+
         # 주유건 위치로 이동 후 그리퍼 닫기
-        movej(g_diesel_posj, 80, 80)
+        movej(g_oil1_ready_posj, 80, 80)
         wait(2.0)
-        movel(posx(0, 40, 0, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        movel(posx(12, 60, -0, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         wait(2.0)
+        g_oil1_end_posj = get_current_posj()
         self.gripper.move(grip_gun)
         wait(2.5)
-        self.set_robot_state(RobotState.FUEL_READY)
 
-        # 주유건 뽑기
+        # 주유건 그립 이후 주유건 뽑아 가기
         movel(posx(-35, 0, 120, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         wait(2.0)
+        g_oil1_go_posj = get_current_posj()
         movel(posx(0, -70, 0, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         wait(2.0)
 
         #--------------------- 직접 주유 작업 시작 ---------------------#
         # 주유구 위치로 이동 
-        movej(g_fuel_posj, 80, 80)
+        movej(g_fuel_car1_posj, 80, 80)
         wait(3.0)
+        movel(posx(-10, -90, -80, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        wait(2.0)
 
-        # 주유건 넣기
-        # movel(posx(0, -60, -50, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        # 주유 작업 반복 수행
         self.run_fuel_task(grip_shot, grip_gun, 5)
+        
+        movel(posx(0, 100, 90, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        wait(2.0)
 
+        movej(g_oil1_go_posj, 80, 80)
+        wait(2.0)
+        movel(posx(10, 0, -120, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
+        # movej(g_oil1_end_posj, 80, 80)
+        wait(2.0)
+
+        self.grip_init()
+        wait(2.0)
+
+        movej(g_oil1_ready_posj, 80, 80)
+        wait(2.0)
         # movel(posx(0, 0, -100, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         # wait(1.0)
         # fuel_controller.check_crash()
 
         # fuel_controller.rotate_grip(3)
         self.robot_init()
+        self.current_state = ROBOT_STATE.IDLE
     
 def main(args=None):
     # ✅ 1️⃣ ROS 초기화 먼저
@@ -322,22 +426,25 @@ def main(args=None):
     try:
         while rclpy.ok():
             rclpy.spin_once(fuel_controller, timeout_sec=0.05)
+            for d in detected_car_list:
+                car_type = d['cls']
+                fuel_controller.get_logger().info(f"🟩 {car_type} 주유 시작")
+                if car_type == 'orange_car' and fuel_controller.current_state == ROBOT_STATE.IDLE:
+                    fuel_controller.get_logger().info(f"🟩 {car_type} 주유 시작")
+                    fuel_controller.run_robot_sequence()
+                    fuel_controller.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
+                # elif car_type == 'yellow_car' and self.current_state == ROBOT_STATE.IDLE:
+                #     fuel_controller.run_robot_sequence()
+                #     self.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
             
-            # 특정 조건 (예: 입력, 토픽, 상태 변화)에 따라 실행
-            if fuel_controller.robot_state == RobotState.IDLE:
-                fuel_controller.run_robot_sequence()
-
     except KeyboardInterrupt:
         print("🛑 Keyboard Interrupt 감지됨, 로봇 정지 중...")
         fuel_controller.terminate_gripper() 
         pass
 
     finally:
-        # 1️⃣ 먼저 로봇 동작이 끝났는지 기다림
-        while fuel_controller.robot_state == RobotState.MOVING:
-            time.sleep(0.1)
-
         try:
+            fuel_controller.terminate_gripper()
             fuel_controller.destroy_node()
             dsr_node.destroy_node()
         except Exception:

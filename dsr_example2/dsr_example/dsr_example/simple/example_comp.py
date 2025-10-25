@@ -25,7 +25,6 @@ def main(args=None):
 
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
-
     P0 = posj(0,0,90,0,90,0)
     movej(P0, VEL, ACC)
     task_compliance_ctrl([500, 500, 500, 100, 100, 100])
