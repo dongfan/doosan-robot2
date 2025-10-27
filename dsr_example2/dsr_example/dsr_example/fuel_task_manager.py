@@ -5,7 +5,7 @@ import numpy as np
 import time
 import math
 
-# from std_msgs.msg import String
+from std_msgs.msg import String
 import json
 
 import threading
@@ -84,6 +84,14 @@ class FuelTaskManager(Node):
         super().__init__("fuel_task_manager")
         self.get_logger().info("🦾 로봇 제어 노드 초기화 중...")
 
+        # ✅ /fuel_task/start 구독 주유결제 명령 수신
+        self.subscription = self.create_subscription(
+            String,
+            '/fuel_task/start',
+            self.on_task_start,
+            10)
+        self.get_logger().info("🦾 FuelTaskManager started — waiting for /fuel_task/start")
+
         # --- Gripper 초기화 ---
         self.gripper = None
         try:
@@ -121,7 +129,7 @@ class FuelTaskManager(Node):
     def timer_callback(self):
         color_frame, depth_frame = self.realsense.get_latest_frames()
         if color_frame is None:
-            self.get_logger().warn("⚠️ RealSense frame not received")
+            # self.get_logger().warn("⚠️ RealSense frame not received")
             return
 
         detections = self.yolo.detect(color_frame)
@@ -307,27 +315,26 @@ class FuelTaskManager(Node):
         self.gripper.move(0)
         wait(1.5)
 
-
     # 반복적으로 그리퍼를 열고 닫는 작업을 수행 : 주유 시작       
-    def run_fuel_task(self, force_on, force_off, cnt):
+    def run_task(self, cnt):
         try:
             for i in range(cnt):
                 self.get_logger().info(f"[Cycle {i+1}/{cnt}] 🔹 Gripper close → open")
 
                 # 1) force_on 동작 (예: 닫기)
-                self.get_logger().info(f"   → move({force_on})")
-                result_on = self.gripper.move(force_on)
+                self.get_logger().info(f"   → move({grip_shot})")
+                result_on = self.gripper.move(grip_shot)
                 if not result_on:
-                    self.get_logger().error(f"❌ Gripper move({force_on}) failed at cycle {i+1}")
+                    self.get_logger().error(f"❌ Gripper move({grip_shot}) failed at cycle {i+1}")
                     break
 
                 time.sleep(2.5)
 
                 # 2) force_off 동작 (예: 열기)
-                self.get_logger().info(f"   → move({force_off})")
-                result_off = self.gripper.move(force_off)
+                self.get_logger().info(f"   → move({grip_gun})")
+                result_off = self.gripper.move(grip_gun)
                 if not result_off:
-                    self.get_logger().error(f"❌ Gripper move({force_off}) failed at cycle {i+1}")
+                    self.get_logger().error(f"❌ Gripper move({grip_gun}) failed at cycle {i+1}")
                     break
 
                 time.sleep(2.5)
@@ -335,9 +342,37 @@ class FuelTaskManager(Node):
             self.get_logger().info(f"✅ Gripper 반복 동작 완료 ({cnt}회 실행)")
 
         except Exception as e:
-            self.get_logger().error(f"Gripper 반복 동작 중 오류 발생: {e}")        
+            self.get_logger().error(f"Gripper 반복 동작 중 오류 발생: {e}")  
 
-    def run_robot_sequence(self):
+    def on_task_start(self, msg: String):
+        try:
+            data = json.loads(msg.data)
+        except Exception as e:
+            self.get_logger().error(f"Invalid message: {e}")
+            return
+
+        fuel_type = data.get("fuelType")
+        amount = data.get("amount")
+        order_id = data.get("orderId")
+
+        self.get_logger().info(f"🚀 Starting fueling task for {fuel_type}, {amount}원 (Order {order_id})")
+
+        # 실제 로봇 주유 시퀀스 로직 연결
+        self.execute_fuel_task(fuel_type, amount)
+
+    def execute_fuel_task(self, fuel_type, amount):
+        self.get_logger().info(f"🛠️ Executing robot motion for {fuel_type} / {amount}원 ...")
+        # TODO: 여기에 로봇 제어 코드 삽입 (movel, 그리퍼, force control 등)
+
+        # 유종별 주유량 로직 예시
+        if fuel_type == "휘발유":
+            self.start_gasoline_fuel(amount)
+        elif fuel_type == "경유":
+            self.start_diesel_fuel(amount)
+        else:
+            self.get_logger().warn(f"Unknown fuel type: {fuel_type}")
+
+    def start_gasoline_fuel(self, amount):
         try:
             from DSR_ROBOT2 import get_current_posj, movel, wait, movej, DR_MV_MOD_REL
             from DR_common2 import posx, posj
@@ -345,6 +380,10 @@ class FuelTaskManager(Node):
             print(f"DSR_ROBOT2 라이브러리를 임포트할 수 없습니다: {e}")
             rclpy.shutdown()
             exit(1)
+
+        # 🔧 실제 로봇 주유 동작 시퀀스 작성
+        self.get_logger().info(f"⛽ Gasoline fueling sequence for {amount}원 started...")
+        m_count = amount // 30000  # 30000원 단위로 주유 횟수 결정
 
         gun_posj = get_current_posj()
 
@@ -388,7 +427,7 @@ class FuelTaskManager(Node):
         wait(2.0)
 
         # 주유 작업 반복 수행
-        self.run_fuel_task(grip_shot, grip_gun, 5)
+        self.run_task(m_count)
         
         movel(posx(0, 100, 90, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         wait(2.0)
@@ -431,7 +470,7 @@ def main(args=None):
                 fuel_controller.get_logger().info(f"🟩 {car_type} 주유 시작")
                 if car_type == 'orange_car' and fuel_controller.current_state == ROBOT_STATE.IDLE:
                     fuel_controller.get_logger().info(f"🟩 {car_type} 주유 시작")
-                    fuel_controller.run_robot_sequence()
+                    # fuel_controller.run_robot_sequence()
                     fuel_controller.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
                 # elif car_type == 'yellow_car' and self.current_state == ROBOT_STATE.IDLE:
                 #     fuel_controller.run_robot_sequence()

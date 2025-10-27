@@ -30,6 +30,7 @@ setup(
                 'test_realsense = dsr_example.simple.test_realsense:main',
                 'test_realsense_force = dsr_example.simple.test_realsense_force:main',
                 'fuel_task_manager = dsr_example.fuel_task_manager:main',
+                'fuel_listener_node = dsr_example.fuel_listener_node:main',
             ],
         },
     )

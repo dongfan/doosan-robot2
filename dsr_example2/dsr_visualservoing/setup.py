@@ -37,8 +37,6 @@ setup(
                 'joint90 = dsr_visualservoing.joint90:main',
                 'detect_marker_gz = dsr_visualservoing.detect_marker_gz:main',
                 'send_pose_servol_gz = dsr_visualservoing.send_pose_servol_gz:main',
-
-
         ],
     },
 )
