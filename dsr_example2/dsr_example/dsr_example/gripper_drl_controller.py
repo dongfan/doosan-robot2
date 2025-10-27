@@ -100,7 +100,7 @@ class GripperController:
         if future.result() is not None:
             return bool(future.result().success)
         else:
-            self.node.get_logger().error(f"Service call failed: {future.exception()}")
+            self.node.get_logger().warn(f"Service call failed: {future.exception()}")
             return False
 
     def initialize(self) -> bool:
@@ -131,7 +131,7 @@ class GripperController:
         if success:
             self.node.get_logger().info(f"Gripper move command for {stroke} sent successfully.")
         else:
-            self.node.get_logger().error("Failed to send gripper move command.")
+            self.node.get_logger().warn("Failed to send gripper move command.")
         return success
 
     def get_position(self) -> int:

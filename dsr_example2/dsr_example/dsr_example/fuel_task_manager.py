@@ -90,6 +90,7 @@ class FuelTaskManager(Node):
             '/fuel_task/start',
             self.on_task_start,
             10)
+        self.status_pub = self.create_publisher(String, '/fuel_status', 10)
         self.get_logger().info("🦾 FuelTaskManager started — waiting for /fuel_task/start")
 
         # --- Gripper 초기화 ---
@@ -316,7 +317,7 @@ class FuelTaskManager(Node):
         wait(1.5)
 
     # 반복적으로 그리퍼를 열고 닫는 작업을 수행 : 주유 시작       
-    def run_task(self, cnt):
+    def run_fuel_task(self, cnt):
         try:
             for i in range(cnt):
                 self.get_logger().info(f"[Cycle {i+1}/{cnt}] 🔹 Gripper close → open")
@@ -343,7 +344,8 @@ class FuelTaskManager(Node):
 
         except Exception as e:
             self.get_logger().error(f"Gripper 반복 동작 중 오류 발생: {e}")  
-
+    
+    # --------------------- Subscribe Server ---------------------#
     def on_task_start(self, msg: String):
         try:
             data = json.loads(msg.data)
@@ -356,6 +358,10 @@ class FuelTaskManager(Node):
         order_id = data.get("orderId")
 
         self.get_logger().info(f"🚀 Starting fueling task for {fuel_type}, {amount}원 (Order {order_id})")
+
+        # 실제 주유 로직 수행 ...
+        self.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
+        self.status_pub.publish(String(data="in_progress"))
 
         # 실제 로봇 주유 시퀀스 로직 연결
         self.execute_fuel_task(fuel_type, amount)
@@ -383,6 +389,10 @@ class FuelTaskManager(Node):
 
         # 🔧 실제 로봇 주유 동작 시퀀스 작성
         self.get_logger().info(f"⛽ Gasoline fueling sequence for {amount}원 started...")
+        
+        if amount < 30000:
+            amount = 30000 # 최소 1회 주유
+        
         m_count = amount // 30000  # 30000원 단위로 주유 횟수 결정
 
         gun_posj = get_current_posj()
@@ -427,7 +437,7 @@ class FuelTaskManager(Node):
         wait(2.0)
 
         # 주유 작업 반복 수행
-        self.run_task(m_count)
+        self.run_fuel_task(m_count)
         
         movel(posx(0, 100, 90, 0, 0, 0), v=g_vel_move, a=g_vel_move, mod=DR_MV_MOD_REL)
         wait(2.0)
@@ -449,7 +459,11 @@ class FuelTaskManager(Node):
 
         # fuel_controller.rotate_grip(3)
         self.robot_init()
+
+        # 주유 완료 시:
         self.current_state = ROBOT_STATE.IDLE
+        self.status_pub.publish(String(data="completed"))
+        self.get_logger().info("✅ Fueling completed.")
     
 def main(args=None):
     # ✅ 1️⃣ ROS 초기화 먼저
@@ -471,7 +485,7 @@ def main(args=None):
                 if car_type == 'orange_car' and fuel_controller.current_state == ROBOT_STATE.IDLE:
                     fuel_controller.get_logger().info(f"🟩 {car_type} 주유 시작")
                     # fuel_controller.run_robot_sequence()
-                    fuel_controller.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
+                    # fuel_controller.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
                 # elif car_type == 'yellow_car' and self.current_state == ROBOT_STATE.IDLE:
                 #     fuel_controller.run_robot_sequence()
                 #     self.current_state = ROBOT_STATE.MOVE_TO_FUEL_POS
